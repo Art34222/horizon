@@ -208,11 +208,14 @@ pub(super) fn potion_cloud_to_nbt(c: &Breath, uuid: [i32; 4], raw: Option<&Tag>)
     };
     let at = Vec3::new(c.at[0], c.at[1], c.at[2]);
     let motion = Vec3::new(c.motion[0], c.motion[1], c.motion[2]);
+    // A loaded cloud keeps the Rotation it was saved with (`Entity.load`);
+    // the model has no slot for it, so the saved compound supplies it.
+    let rotation = raw.map_or([0.0; 2], horizon_client::entity_nbt::loaded_rotation);
     let mut tag = horizon_client::entity_nbt::entity_base_tag(
         "minecraft:area_effect_cloud",
         at,
         motion,
-        [0.0, 0.0],
+        rotation,
         uuid,
         raw,
     );
@@ -1907,6 +1910,21 @@ impl Game<'_> {
     /// five-tick doses, with each victim's configured reapplication delay.
     /// False once the cloud is gone.
     fn tick_potion_cloud(&mut self, c: &mut Breath, players: &[FightPlayer]) -> bool {
+        // `Entity.baseTick` -> `updateFluidInteraction`: a cloud whose box (`radius * 2`
+        // wide, 0.5 high) is in water resets the fall distance it was loaded with.
+        if c.potion.is_some() {
+            let r = f64::from(c.radius);
+            let bounds = Aabb::new(
+                Vec3::new(c.at[0] - r, c.at[1], c.at[2] - r),
+                Vec3::new(c.at[0] + r, c.at[1] + 0.5, c.at[2] + r),
+            );
+            if self.bounds_in_water(bounds)
+                && let Some(Tag::Compound(raw)) = self.persist.raw.get_mut(&c.id)
+                && raw.contains_key(&"fall_distance".into())
+            {
+                raw.insert("fall_distance".into(), Tag::Double(0.0_f64.to_bits()));
+            }
+        }
         c.age = c.age.wrapping_add(1);
         let Some(potion) = c.potion.as_mut() else {
             return true;
